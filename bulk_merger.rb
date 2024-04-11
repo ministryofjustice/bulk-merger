@@ -21,7 +21,7 @@ class BulkMerger
 
     return if list
 
-    puts "\nHave you reviewed the changes, and you want to approve all these PRs? [y/N]\n"
+    puts "\nHave you reviewed the changes, and do you want to approve all these PRs? [y/N]\n"
     if STDIN.gets.chomp == "y"
       puts "OK! 👍 Approving away..."
     else
@@ -56,7 +56,7 @@ class BulkMerger
       puts "- '#{pr.title}' (#{pr.html_url}) "
     end
 
-    puts "\nHave you reviewed the changes, and you want to process all these PRs? [y/N]\n"
+    puts "\nHave you reviewed the changes, and do you want to MERGE all these PRs? [y/N]\n"
     if STDIN.gets.chomp == "y"
       unmerged_pull_requests.each do |pr|
         repo = pr.repository_url.gsub("https://api.github.com/repos/", "")
