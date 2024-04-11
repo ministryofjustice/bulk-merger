@@ -1,4 +1,6 @@
 require "octokit"
+require 'net/http'
+require 'json'
 
 class BulkMerger
   def self.approve_unreviewed_pull_requests!(list: nil)
@@ -31,9 +33,12 @@ class BulkMerger
       print "Reviewing PR '#{pr.title}' (#{pr.html_url}) "
 
       repo = pr.repository_url.gsub("https://api.github.com/repos/", "")
-      client.create_pull_request_review(repo, pr.number, event: "APPROVE")
-
-      puts "✅"
+      begin
+        client.create_pull_request_review(repo, pr.number, event: "APPROVE")
+        puts "✅"
+      rescue Octokit::Error => e
+        puts "❌ Failed to approve: #{e.message.inspect}"
+      end
     end
   end
 
@@ -51,25 +56,30 @@ class BulkMerger
       puts "- '#{pr.title}' (#{pr.html_url}) "
     end
 
-    puts "\nHave you reviewed the changes, and you want to MERGE all these PRs? [y/N]\n"
+    puts "\nHave you reviewed the changes, and you want to process all these PRs? [y/N]\n"
     if STDIN.gets.chomp == "y"
-      puts "OK! 👍 Merging away..."
-    else
-      puts "👋"
-      exit 1
-    end
-
-    unmerged_pull_requests.each do |pr|
-      print "Merging PR '#{pr.title}' (#{pr.html_url}) "
-
-      repo = pr.repository_url.gsub("https://api.github.com/repos/", "")
-
-      begin
-        client.merge_pull_request(repo, pr.number)
-        puts "✅"
-      rescue Octokit::MethodNotAllowed => e
-        puts "❌ Failed to merge: #{e.message.inspect}"
+      unmerged_pull_requests.each do |pr|
+        repo = pr.repository_url.gsub("https://api.github.com/repos/", "")
+        if merge_queue_enabled?(repo)
+          begin
+            # Assuming `add_to_merge_queue` is a method that adds a PR to the merge queue
+            pull_request_id = get_pull_request_id(repo, pr.number)
+            add_to_merge_queue(repo, pull_request_id)
+            puts "✅ Added PR '#{pr.title}' to the merge queue"
+          rescue => e
+            puts "❌ Failed to add PR '#{pr.title}' to the merge queue: #{e.message}"
+          end
+        else
+          begin
+            client.merge_pull_request(repo, pr.number)
+            puts "✅ Merged PR '#{pr.title}'"
+          rescue Octokit::Error => e
+            puts "❌ Failed to merge: #{e.message.inspect}"
+          end
+        end
       end
+    else
+      puts "Aborted. No PRs were processed."
     end
   end
 
@@ -100,5 +110,78 @@ class BulkMerger
 
   def self.repo_string
     ENV.fetch("REPO_STRING")
+  end
+
+  # Checks repository for merge queue enabled
+  def self.merge_queue_enabled?(repo)
+    owner, repo_name = repo.split('/')
+  
+    query = <<~GRAPHQL
+      query {
+        repository(owner: "#{owner}", name: "#{repo_name}") {
+          mergeQueue {
+            id
+          }
+        }
+      }
+    GRAPHQL
+  
+    uri = URI('https://api.github.com/graphql')
+    req = Net::HTTP::Post.new(uri, 'Authorization' => "Bearer #{ENV['GITHUB_TOKEN']}")
+    req.body = { query: query }.to_json
+    res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+    
+    # uncomment below line to see the response from the API
+    # puts "Response from merge_queue_enabled?: #{res.body}"
+
+    data = JSON.parse(res.body)
+    !data.dig('data', 'repository', 'mergeQueue').nil?
+  end
+
+  # Get the pull request ID
+  def self.get_pull_request_id(repo, number)
+    owner, repo_name = repo.split('/')
+  
+    query = <<~GRAPHQL
+      query {
+        repository(owner: "#{owner}", name: "#{repo_name}") {
+          pullRequest(number: #{number}) {
+            id
+          }
+        }
+      }
+    GRAPHQL
+  
+    uri = URI('https://api.github.com/graphql')
+    req = Net::HTTP::Post.new(uri, 'Authorization' => "Bearer #{ENV['GITHUB_TOKEN']}")
+    req.body = { query: query }.to_json
+    res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+  
+    data = JSON.parse(res.body)
+    data.dig('data', 'repository', 'pullRequest', 'id')
+  end
+
+  # Adds a PR to the merge queue
+  def self.add_to_merge_queue(repo, pull_request_id)
+    owner, repo_name = repo.split('/') 
+  
+    mutation = <<~GRAPHQL
+      mutation {
+        enqueuePullRequest(input: { pullRequestId: "#{pull_request_id}" }) {
+          clientMutationId
+        }
+      }
+    GRAPHQL
+  
+    uri = URI('https://api.github.com/graphql')
+    req = Net::HTTP::Post.new(uri, 'Authorization' => "Bearer #{ENV['GITHUB_TOKEN']}")
+    req.body = { query: mutation }.to_json
+    res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+
+    # uncomment below line to see the response from the API
+    # puts "Response from add_to_merge_queue: #{res.body}"
+
+    data = JSON.parse(res.body)
+    data.dig('data', 'enqueuePullRequest', 'clientMutationId')
   end
 end
