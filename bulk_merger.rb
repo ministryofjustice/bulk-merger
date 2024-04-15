@@ -62,7 +62,6 @@ class BulkMerger
         repo = pr.repository_url.gsub("https://api.github.com/repos/", "")
         if merge_queue_enabled?(repo)
           begin
-            # Assuming `add_to_merge_queue` is a method that adds a PR to the merge queue
             pull_request_id = get_pull_request_id(repo, pr.number)
             add_to_merge_queue(repo, pull_request_id)
             puts "✅ Added PR '#{pr.title}' to the merge queue"
